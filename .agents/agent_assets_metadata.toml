@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "7HBalw4eVRtrZ8FCM52Hz"
+uri = "file://artifacts/ai-chat/assets/images/icon.png"
+type = "image"
+title = "ai chat app icon"
