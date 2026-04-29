@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-20", "web", "bash"]
 
 [deployment]
 router = "application"
@@ -33,7 +33,7 @@ args = "PORT=24260 BASE_PATH=/ pnpm --filter @workspace/ai-chat run dev"
 waitForPort = 24260
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
