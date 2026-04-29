@@ -1,5 +1,4 @@
 import { Feather } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -18,17 +17,30 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ChatBubble } from "@/components/ChatBubble";
+import { ConversationsSheet } from "@/components/ConversationsSheet";
 import { ModelSheet } from "@/components/ModelSheet";
 import { useApiKey } from "@/contexts/ApiKeyContext";
 import { useChatPrefs } from "@/contexts/ChatPrefsContext";
 import { useColors } from "@/hooks/useColors";
+import {
+  type Conversation,
+  DEFAULT_TITLE,
+  type DisplayMessage,
+  createConversation,
+  deleteConversation,
+  getActiveConvId,
+  listConversations,
+  loadConversationMessages,
+  makeTitleFromContent,
+  migrateLegacyIfAny,
+  saveConversationMessages,
+  setActiveConvIdStorage,
+  updateConversation,
+} from "@/lib/conversationStore";
 import { type ChatMessage, sendChatRequest } from "@/lib/openrouter";
 import { findTool } from "@/lib/tools";
 
-const MESSAGES_KEY = "@ai-chat/messages";
 const MAX_HISTORY = 30;
-
-type DisplayMessage = ChatMessage & { id: string };
 
 function newId() {
   return Date.now().toString() + Math.random().toString(36).slice(2, 9);
@@ -51,7 +63,10 @@ export default function ChatScreen() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showModels, setShowModels] = useState(false);
+  const [showConvs, setShowConvs] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const animatedIdsRef = useRef<Set<string>>(new Set());
   const [, forceRerender] = useState(0);
@@ -60,14 +75,27 @@ export default function ChatScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const storedMsgs = await AsyncStorage.getItem(MESSAGES_KEY);
-        if (storedMsgs) {
-          const parsed = JSON.parse(storedMsgs) as DisplayMessage[];
-          if (Array.isArray(parsed)) {
-            setMessages(parsed);
-            for (const m of parsed) animatedIdsRef.current.add(m.id);
-          }
+        const { migrated, conv: legacyConv } = await migrateLegacyIfAny();
+        let list = await listConversations();
+        const storedActive = await getActiveConvId();
+
+        let active: Conversation | undefined =
+          (storedActive ? list.find((c) => c.id === storedActive) : undefined) ??
+          (migrated ? legacyConv : undefined) ??
+          list[0];
+
+        if (!active) {
+          active = await createConversation();
+          list = [active, ...list];
         }
+
+        await setActiveConvIdStorage(active.id);
+        const msgs = await loadConversationMessages(active.id);
+        for (const m of msgs) animatedIdsRef.current.add(m.id);
+
+        setConversations(list);
+        setActiveConvId(active.id);
+        setMessages(msgs);
       } catch {
         // ignore
       } finally {
@@ -82,9 +110,83 @@ export default function ChatScreen() {
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    AsyncStorage.setItem(MESSAGES_KEY, JSON.stringify(messages)).catch(() => {});
-  }, [messages, hydrated]);
+    if (!hydrated || !activeConvId) return;
+    saveConversationMessages(activeConvId, messages).catch(() => {});
+
+    if (messages.length === 0) return;
+    const current = conversations.find((c) => c.id === activeConvId);
+    if (!current) return;
+    const firstUser = messages.find((m) => m.role === "user");
+    const shouldRetitle =
+      current.title === DEFAULT_TITLE &&
+      firstUser &&
+      typeof firstUser.content === "string";
+    const newTitle = shouldRetitle
+      ? makeTitleFromContent(firstUser!.content as string)
+      : current.title;
+    const now = Date.now();
+    if (newTitle === current.title && now - current.updatedAt < 500) return;
+    const patched: Conversation = { ...current, title: newTitle, updatedAt: now };
+    setConversations((prev) =>
+      [patched, ...prev.filter((c) => c.id !== activeConvId)],
+    );
+    updateConversation(activeConvId, {
+      title: patched.title,
+      updatedAt: patched.updatedAt,
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, hydrated, activeConvId]);
+
+  const handleNewChat = useCallback(async () => {
+    abortRef.current?.abort();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const conv = await createConversation();
+    await setActiveConvIdStorage(conv.id);
+    setConversations((prev) => [conv, ...prev.filter((c) => c.id !== conv.id)]);
+    setActiveConvId(conv.id);
+    setMessages([]);
+    setShowConvs(false);
+  }, []);
+
+  const handleSwitchConv = useCallback(
+    async (id: string) => {
+      if (id === activeConvId) {
+        setShowConvs(false);
+        return;
+      }
+      abortRef.current?.abort();
+      Haptics.selectionAsync();
+      const msgs = await loadConversationMessages(id);
+      for (const m of msgs) animatedIdsRef.current.add(m.id);
+      await setActiveConvIdStorage(id);
+      setActiveConvId(id);
+      setMessages(msgs);
+      setShowConvs(false);
+    },
+    [activeConvId],
+  );
+
+  const handleDeleteConv = useCallback(
+    async (id: string) => {
+      await deleteConversation(id);
+      const remaining = conversations.filter((c) => c.id !== id);
+      if (id === activeConvId) {
+        abortRef.current?.abort();
+        let next: Conversation | undefined = remaining[0];
+        if (!next) {
+          next = await createConversation();
+          remaining.unshift(next);
+        }
+        await setActiveConvIdStorage(next.id);
+        const msgs = await loadConversationMessages(next.id);
+        for (const m of msgs) animatedIdsRef.current.add(m.id);
+        setActiveConvId(next.id);
+        setMessages(msgs);
+      }
+      setConversations(remaining);
+    },
+    [activeConvId, conversations],
+  );
 
   const handleSend = useCallback(
     async (text?: string) => {
@@ -223,29 +325,57 @@ export default function ChatScreen() {
           },
         ]}
       >
-        <Pressable
-          onPress={() => {
-            Haptics.selectionAsync();
-            setShowModels(true);
-          }}
-          style={({ pressed }) => [
-            styles.modelBtn,
-            { backgroundColor: colors.card, opacity: pressed ? 0.7 : 1 },
-          ]}
-        >
-          <View style={[styles.dot, { backgroundColor: colors.primary }]} />
-          <Text style={[styles.modelLabel, { color: colors.foreground }]} numberOfLines={1}>
-            {currentModelLabel}
-          </Text>
-          {reasoning ? (
-            <View style={[styles.badge, { backgroundColor: colors.accent }]}>
-              <Feather name="cpu" size={10} color={colors.primary} />
-            </View>
-          ) : null}
-          <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
-        </Pressable>
+        <View style={styles.headerLeft}>
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setShowConvs(true);
+            }}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { backgroundColor: colors.card, opacity: pressed ? 0.7 : 1 },
+            ]}
+            hitSlop={8}
+          >
+            <Feather name="menu" size={18} color={colors.foreground} />
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setShowModels(true);
+            }}
+            style={({ pressed }) => [
+              styles.modelBtn,
+              { backgroundColor: colors.card, opacity: pressed ? 0.7 : 1 },
+            ]}
+          >
+            <View style={[styles.dot, { backgroundColor: colors.primary }]} />
+            <Text
+              style={[styles.modelLabel, { color: colors.foreground }]}
+              numberOfLines={1}
+            >
+              {currentModelLabel}
+            </Text>
+            {reasoning ? (
+              <View style={[styles.badge, { backgroundColor: colors.accent }]}>
+                <Feather name="cpu" size={10} color={colors.primary} />
+              </View>
+            ) : null}
+            <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
+          </Pressable>
+        </View>
 
         <View style={styles.headerActions}>
+          <Pressable
+            onPress={handleNewChat}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { backgroundColor: colors.card, opacity: pressed ? 0.7 : 1 },
+            ]}
+            hitSlop={8}
+          >
+            <Feather name="edit" size={18} color={colors.foreground} />
+          </Pressable>
           <Pressable
             onPress={handleClear}
             disabled={messages.length === 0}
@@ -414,6 +544,16 @@ export default function ChatScreen() {
         visible={showModels}
         onClose={() => setShowModels(false)}
       />
+
+      <ConversationsSheet
+        visible={showConvs}
+        onClose={() => setShowConvs(false)}
+        conversations={conversations}
+        activeId={activeConvId}
+        onSelect={handleSwitchConv}
+        onNew={handleNewChat}
+        onDelete={handleDeleteConv}
+      />
     </View>
   );
 }
@@ -452,6 +592,13 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 1,
+    minWidth: 0,
   },
   headerActions: {
     flexDirection: "row",
