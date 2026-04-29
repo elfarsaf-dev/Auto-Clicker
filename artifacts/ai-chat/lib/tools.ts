@@ -1,3 +1,10 @@
+import {
+  FileSystem,
+  ensureParentDir,
+  ensureSandboxRoot,
+  isFsAvailable,
+  resolveSandboxPath,
+} from "./agentFs";
 import { nexrayGet } from "./nexray";
 
 export type ToolDefinition = {
@@ -429,6 +436,229 @@ export const TOOLS: Tool[] = [
         ...(r.category ? { category: r.category } : {}),
       }));
       return JSON.stringify({ source: src, items });
+    },
+  },
+  {
+    label: "Membuat gambar...",
+    definition: {
+      type: "function",
+      function: {
+        name: "generate_image",
+        description:
+          "Generate gambar dari prompt teks pakai AI (MagicStudio). Hasilnya disimpan di sandbox lokal app. PENTING: setelah dapat hasil, sertakan tag markdown ![deskripsi](file_uri) di balasan kamu agar gambar muncul di chat.",
+        parameters: {
+          type: "object",
+          properties: {
+            prompt: {
+              type: "string",
+              description: "Deskripsi gambar yang diinginkan, dalam bahasa Inggris akan kasih hasil terbaik",
+            },
+          },
+          required: ["prompt"],
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const prompt = String(args.prompt ?? "").trim();
+      if (!prompt) throw new Error("Prompt kosong.");
+      if (!isFsAvailable()) {
+        throw new Error(
+          "Penyimpanan lokal tidak tersedia di preview web. Pakai Expo Go atau build native untuk fitur ini.",
+        );
+      }
+      await ensureSandboxRoot();
+      const { absolute: imagesDirAbs, relative: imagesDirRel } = resolveSandboxPath("images");
+      const dirInfo = await FileSystem.getInfoAsync(imagesDirAbs);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(imagesDirAbs, { intermediates: true });
+      }
+      const slug =
+        prompt
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 30) || "image";
+      const filename = `${slug}-${Date.now()}.jpg`;
+      const filePath = `${imagesDirAbs}/${filename}`;
+      const url = `https://api.nexray.eu.cc/ai/magicstudio?prompt=${encodeURIComponent(prompt)}`;
+      const res = await FileSystem.downloadAsync(url, filePath);
+      if (res.status !== 200) {
+        throw new Error(`Gagal mengunduh gambar (HTTP ${res.status}).`);
+      }
+      return JSON.stringify({
+        prompt,
+        path: `${imagesDirRel}/${filename}`,
+        uri: res.uri,
+        markdown_to_show: `![${prompt}](${res.uri})`,
+      });
+    },
+  },
+  {
+    label: "Menulis file...",
+    definition: {
+      type: "function",
+      function: {
+        name: "fs_write_file",
+        description:
+          "Tulis (atau timpa) file teks di sandbox lokal app. Folder parent dibuat otomatis. Gunakan untuk simpan catatan, kode, HTML, JSON, dll.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Path relatif dari sandbox root, contoh: 'notes/todo.md', 'project/index.html'",
+            },
+            content: { type: "string", description: "Isi file (teks UTF-8)" },
+          },
+          required: ["path", "content"],
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const path = String(args.path ?? "");
+      const content = String(args.content ?? "");
+      if (!path) throw new Error("Path kosong.");
+      if (!isFsAvailable()) throw new Error("Penyimpanan lokal tidak tersedia di lingkungan ini.");
+      await ensureSandboxRoot();
+      const { absolute, relative } = resolveSandboxPath(path);
+      await ensureParentDir(absolute);
+      await FileSystem.writeAsStringAsync(absolute, content);
+      return JSON.stringify({ ok: true, path: relative, bytes: content.length });
+    },
+  },
+  {
+    label: "Membaca file...",
+    definition: {
+      type: "function",
+      function: {
+        name: "fs_read_file",
+        description: "Baca isi file teks dari sandbox lokal app.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path relatif dari sandbox root" },
+          },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const path = String(args.path ?? "");
+      if (!path) throw new Error("Path kosong.");
+      if (!isFsAvailable()) throw new Error("Penyimpanan lokal tidak tersedia di lingkungan ini.");
+      await ensureSandboxRoot();
+      const { absolute, relative } = resolveSandboxPath(path);
+      const info = await FileSystem.getInfoAsync(absolute);
+      if (!info.exists) throw new Error(`File tidak ditemukan: ${relative}`);
+      if (info.isDirectory) throw new Error(`${relative} adalah folder, bukan file.`);
+      const content = await FileSystem.readAsStringAsync(absolute);
+      const max = 8000;
+      const truncated = content.length > max;
+      return JSON.stringify({
+        path: relative,
+        bytes: content.length,
+        content: truncated ? content.slice(0, max) + "\n... [truncated]" : content,
+        truncated,
+      });
+    },
+  },
+  {
+    label: "Melihat folder...",
+    definition: {
+      type: "function",
+      function: {
+        name: "fs_list_folder",
+        description:
+          "Daftar isi folder di sandbox lokal app. Path kosong = root sandbox. Mengembalikan nama, tipe (file/folder), dan ukuran.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path folder relatif, kosongkan untuk root" },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      if (!isFsAvailable()) throw new Error("Penyimpanan lokal tidak tersedia di lingkungan ini.");
+      await ensureSandboxRoot();
+      const { absolute, relative } = resolveSandboxPath(String(args.path ?? ""));
+      const info = await FileSystem.getInfoAsync(absolute);
+      if (!info.exists) throw new Error(`Folder tidak ada: ${relative}`);
+      if (!info.isDirectory) throw new Error(`${relative} adalah file, bukan folder.`);
+      const entries = await FileSystem.readDirectoryAsync(absolute);
+      const detailed = await Promise.all(
+        entries.map(async (name) => {
+          const full = `${absolute.replace(/\/$/, "")}/${name}`;
+          const i = await FileSystem.getInfoAsync(full);
+          return {
+            name,
+            type: i.isDirectory ? "folder" : "file",
+            size: i.isDirectory ? null : (i as { size?: number }).size ?? null,
+          };
+        }),
+      );
+      return JSON.stringify({ path: relative, entries: detailed });
+    },
+  },
+  {
+    label: "Membuat folder...",
+    definition: {
+      type: "function",
+      function: {
+        name: "fs_create_folder",
+        description: "Buat folder baru (termasuk parent folder otomatis) di sandbox lokal app.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path folder relatif" },
+          },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const path = String(args.path ?? "");
+      if (!path) throw new Error("Path kosong.");
+      if (!isFsAvailable()) throw new Error("Penyimpanan lokal tidak tersedia di lingkungan ini.");
+      await ensureSandboxRoot();
+      const { absolute, relative } = resolveSandboxPath(path);
+      await FileSystem.makeDirectoryAsync(absolute, { intermediates: true });
+      return JSON.stringify({ ok: true, path: relative });
+    },
+  },
+  {
+    label: "Menghapus file...",
+    definition: {
+      type: "function",
+      function: {
+        name: "fs_delete",
+        description: "Hapus file atau folder (rekursif kalau folder) di sandbox lokal app.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path file/folder relatif" },
+          },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const path = String(args.path ?? "");
+      if (!path) throw new Error("Path kosong.");
+      if (path.replace(/^\/+/, "").replace(/\/+$/, "") === "") {
+        throw new Error("Tidak boleh menghapus root sandbox.");
+      }
+      if (!isFsAvailable()) throw new Error("Penyimpanan lokal tidak tersedia di lingkungan ini.");
+      await ensureSandboxRoot();
+      const { absolute, relative } = resolveSandboxPath(path);
+      await FileSystem.deleteAsync(absolute, { idempotent: true });
+      return JSON.stringify({ ok: true, deleted: relative });
     },
   },
 ];
