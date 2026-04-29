@@ -263,7 +263,7 @@ export async function sendChatRequest(params: {
         toolResult = JSON.stringify({ error: toolError });
       } else {
         try {
-          toolResult = await tool.execute(parsedArgs);
+          toolResult = await tool.execute(parsedArgs, signal);
         } catch (e) {
           toolError = e instanceof Error ? e.message : String(e);
           toolResult = JSON.stringify({ error: toolError });

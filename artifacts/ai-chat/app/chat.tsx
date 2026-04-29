@@ -23,6 +23,7 @@ import { useApiKey } from "@/contexts/ApiKeyContext";
 import { useChatPrefs } from "@/contexts/ChatPrefsContext";
 import { useColors } from "@/hooks/useColors";
 import { type ChatMessage, sendChatRequest } from "@/lib/openrouter";
+import { findTool } from "@/lib/tools";
 
 const MESSAGES_KEY = "@ai-chat/messages";
 const MAX_HISTORY = 30;
@@ -117,7 +118,7 @@ export default function ChatScreen() {
             role: "system",
             content:
               toolsEnabled
-                ? "Kamu adalah asisten AI yang ramah, jelas, dan ringkas. Jawab dalam bahasa yang sama dengan pengguna. Hindari emoji. Kamu memiliki akses ke tools: 'get_current_time' (panggil ini setiap kali pengguna bertanya jam/tanggal/hari) dan 'calculate' (gunakan untuk semua perhitungan numerik). Selalu gunakan tools daripada menebak."
+                ? "Kamu adalah asisten AI yang ramah, jelas, dan ringkas. Jawab dalam bahasa yang sama dengan pengguna. Hindari emoji. Kamu punya akses ke tools untuk: cek waktu (get_current_time), hitung matematika (calculate), pencarian web (web_search), Wikipedia (wikipedia_search), cuaca BMKG (weather), gempa terbaru BMKG (earthquake_latest), jadwal sholat (prayer_times), jadwal TV Indonesia (tv_schedule), lirik lagu (song_lyrics), resep masakan (recipe_search), dan berita Indonesia (news_indonesia). Selalu gunakan tools daripada menebak — terutama untuk data faktual, terkini, atau spesifik. Setelah dapat hasil tool, ringkas jawabannya dengan rapi tanpa menyebut nama tool-nya."
                 : "Kamu adalah asisten AI yang ramah, jelas, dan ringkas. Jawab dalam bahasa yang sama dengan pengguna. Hindari emoji.",
           },
           ...trimmed.map(({ role, content }) => ({ role, content })),
@@ -130,11 +131,8 @@ export default function ChatScreen() {
           reasoning,
           toolsEnabled,
           onToolCall: (event) => {
-            const labelMap: Record<string, string> = {
-              get_current_time: "Memeriksa waktu...",
-              calculate: "Menghitung...",
-            };
-            setToolStatus(labelMap[event.name] ?? `Menjalankan ${event.name}...`);
+            const tool = findTool(event.name);
+            setToolStatus(tool?.label ?? `Menjalankan ${event.name}...`);
           },
           signal: controller.signal,
         });
