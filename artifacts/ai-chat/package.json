@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "eas:login": "pnpm exec eas login",
     "eas:whoami": "pnpm exec eas whoami",
+    "apk:development": "pnpm exec eas build --profile development --platform android",
     "apk:preview": "pnpm exec eas build --profile preview --platform android",
     "apk:production": "pnpm exec eas build --profile production --platform android"
   },

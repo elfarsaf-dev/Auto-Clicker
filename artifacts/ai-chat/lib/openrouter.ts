@@ -169,6 +169,7 @@ function buildErrorMessage(
 
 export type ToolEvent = {
   name: string;
+  label?: string;
   args: Record<string, unknown>;
   result?: string;
   error?: string;
@@ -186,7 +187,7 @@ export async function sendChatRequest(params: {
   signal?: AbortSignal;
 }): Promise<string> {
   const { apiKey, model, reasoning, toolsEnabled, onToolCall, signal } = params;
-  const tools = toolsEnabled ? getToolDefinitions() : undefined;
+  const tools = toolsEnabled ? await getToolDefinitions() : undefined;
 
   const conversation: ChatMessage[] = [...params.messages];
 
@@ -246,7 +247,7 @@ export async function sendChatRequest(params: {
     });
 
     for (const call of result.toolCalls) {
-      const tool = findTool(call.function.name);
+      const tool = await findTool(call.function.name);
       let parsedArgs: Record<string, unknown> = {};
       try {
         parsedArgs = call.function.arguments
@@ -272,6 +273,7 @@ export async function sendChatRequest(params: {
 
       onToolCall?.({
         name: call.function.name,
+        label: tool?.label,
         args: parsedArgs,
         result: toolError ? undefined : toolResult,
         error: toolError,

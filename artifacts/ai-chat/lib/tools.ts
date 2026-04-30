@@ -5,6 +5,12 @@ import {
   isFsAvailable,
   resolveSandboxPath,
 } from "./agentFs";
+import {
+  type CustomTool,
+  getCustomTool,
+  listCustomTools,
+} from "./customToolsStore";
+import { buildToolDefinition, runHttpTool } from "./httpToolRunner";
 import { nexrayGet } from "./nexray";
 import { getSnippet, listSnippets } from "./snippetsStore";
 
@@ -86,7 +92,7 @@ const NEWS_SOURCES = [
   "cnbcindonesia",
 ] as const;
 
-export const TOOLS: Tool[] = [
+export const BUILTIN_TOOLS: Tool[] = [
   {
     label: "Memeriksa waktu...",
     definition: {
@@ -753,10 +759,53 @@ export const TOOLS: Tool[] = [
   },
 ];
 
-export function getToolDefinitions(): ToolDefinition[] {
-  return TOOLS.map((t) => t.definition);
+function customToolToTool(ct: CustomTool): Tool {
+  return {
+    label: ct.label || `Menjalankan ${ct.name}...`,
+    definition: buildToolDefinition(ct),
+    execute: (args, signal) => runHttpTool(ct, args, signal),
+  };
 }
 
-export function findTool(name: string): Tool | undefined {
-  return TOOLS.find((t) => t.definition.function.name === name);
+const BUILTIN_NAMES = new Set(BUILTIN_TOOLS.map((t) => t.definition.function.name));
+
+export async function getAllTools(): Promise<Tool[]> {
+  let custom: CustomTool[] = [];
+  try {
+    custom = await listCustomTools();
+  } catch {
+    custom = [];
+  }
+  const filtered = custom.filter((c) => !BUILTIN_NAMES.has(c.name));
+  return [...BUILTIN_TOOLS, ...filtered.map(customToolToTool)];
+}
+
+export async function getToolDefinitions(): Promise<ToolDefinition[]> {
+  const all = await getAllTools();
+  return all.map((t) => t.definition);
+}
+
+export async function findTool(name: string): Promise<Tool | undefined> {
+  const builtin = BUILTIN_TOOLS.find((t) => t.definition.function.name === name);
+  if (builtin) return builtin;
+  try {
+    const ct = await getCustomTool(name);
+    if (ct) return customToolToTool(ct);
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+export async function getCustomToolsBrief(): Promise<
+  Array<{ name: string; description: string }>
+> {
+  try {
+    const list = await listCustomTools();
+    return list
+      .filter((c) => !BUILTIN_NAMES.has(c.name))
+      .map((c) => ({ name: c.name, description: c.description }));
+  } catch {
+    return [];
+  }
 }

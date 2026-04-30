@@ -41,16 +41,14 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "extra": {
-      "eas": {
-        "projectId": "e435a624-5077-4b9c-be53-e951d50a64c1"
-      }
-    },
     "runtimeVersion": {
       "policy": "appVersion"
     },
-    "updates": {
-      "url": "https://u.expo.dev/e435a624-5077-4b9c-be53-e951d50a64c1"
-    }
+    "extra": {
+      "eas": {
+        "projectId": "3273f216-db11-43bb-9300-841bdb7b1898"
+      }
+    },
+    "owner": "elfarsaf-devvv"
   }
 }
