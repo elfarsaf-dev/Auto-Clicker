@@ -35,6 +35,12 @@ function RootLayoutNav() {
       <Stack.Screen name="index" />
       <Stack.Screen name="setup" />
       <Stack.Screen name="chat" />
+      <Stack.Screen name="files/index" />
+      <Stack.Screen name="files/[project]/index" />
+      <Stack.Screen name="files/[project]/edit" />
+      <Stack.Screen name="files/[project]/preview" />
+      <Stack.Screen name="snippets/index" />
+      <Stack.Screen name="snippets/[name]" />
     </Stack>
   );
 }

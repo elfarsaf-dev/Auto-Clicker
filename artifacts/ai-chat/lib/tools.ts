@@ -6,6 +6,7 @@ import {
   resolveSandboxPath,
 } from "./agentFs";
 import { nexrayGet } from "./nexray";
+import { getSnippet, listSnippets } from "./snippetsStore";
 
 export type ToolDefinition = {
   type: "function";
@@ -659,6 +660,95 @@ export const TOOLS: Tool[] = [
       const { absolute, relative } = resolveSandboxPath(path);
       await FileSystem.deleteAsync(absolute, { idempotent: true });
       return JSON.stringify({ ok: true, deleted: relative });
+    },
+  },
+  {
+    label: "Mencari snippet...",
+    definition: {
+      type: "function",
+      function: {
+        name: "list_snippets",
+        description:
+          "Daftar snippet kode contoh di library lokal (campuran bawaan Joko UI + buatan user). Gunakan SEBELUM menulis kode dari nol untuk komponen UI umum. Tag bawaan: 'joko-ui' + kategori (navbars, sidebars, breadcrumbs, avatars, forms, buttons, cards, loaders, badges, alerts, progress, skeleton, table). Filter pakai tag kategori (mis: tag='buttons') buat lihat semua tombol Tailwind yang ada. Kembalikan nama, judul, desc, lang, tag. Ambil isi pakai get_snippet sebelum bikin versi sendiri.",
+        parameters: {
+          type: "object",
+          properties: {
+            lang: {
+              type: "string",
+              description: "Filter opsional bahasa (mis: 'html', 'css', 'js', 'tsx').",
+            },
+            tag: {
+              type: "string",
+              description: "Filter opsional tag (mis: 'button', 'card', 'form').",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const items = await listSnippets();
+      const lang = (args.lang ? String(args.lang) : "").trim().toLowerCase();
+      const tag = (args.tag ? String(args.tag) : "").trim().toLowerCase();
+      const filtered = items.filter((s) => {
+        if (lang && s.lang.toLowerCase() !== lang) return false;
+        if (tag && !s.tags.some((t) => t.toLowerCase() === tag)) return false;
+        return true;
+      });
+      return JSON.stringify({
+        total: filtered.length,
+        snippets: filtered.map((s) => ({
+          name: s.name,
+          title: s.title,
+          desc: s.desc,
+          lang: s.lang,
+          tags: s.tags,
+        })),
+        hint:
+          filtered.length === 0
+            ? "Tidak ada snippet yang cocok. Tulis kode dari pengetahuanmu sendiri."
+            : "Panggil get_snippet({name}) untuk lihat kode lengkap.",
+      });
+    },
+  },
+  {
+    label: "Mengambil snippet...",
+    definition: {
+      type: "function",
+      function: {
+        name: "get_snippet",
+        description:
+          "Ambil isi kode lengkap dari satu snippet di library lokal user. Pakai NAMA persis dari hasil list_snippets. Pakai snippet ini sebagai dasar/contoh saat menulis kode untuk user.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Nama snippet (slug, contoh: 'tombol-primer').",
+            },
+          },
+          required: ["name"],
+          additionalProperties: false,
+        },
+      },
+    },
+    execute: async (args) => {
+      const name = String(args.name ?? "").trim();
+      if (!name) throw new Error("Nama snippet kosong.");
+      const snippet = await getSnippet(name);
+      if (!snippet) {
+        return JSON.stringify({
+          error: `Snippet "${name}" tidak ditemukan. Coba list_snippets dulu untuk lihat daftar lengkap.`,
+        });
+      }
+      return JSON.stringify({
+        name: snippet.name,
+        title: snippet.title,
+        desc: snippet.desc,
+        lang: snippet.lang,
+        tags: snippet.tags,
+        code: snippet.code,
+      });
     },
   },
 ];
