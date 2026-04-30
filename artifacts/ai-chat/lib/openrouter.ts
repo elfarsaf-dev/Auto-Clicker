@@ -174,7 +174,7 @@ export type ToolEvent = {
   error?: string;
 };
 
-const MAX_TOOL_HOPS = 5;
+const MAX_TOOL_HOPS = 50;
 
 export async function sendChatRequest(params: {
   apiKey: string;
